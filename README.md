@@ -11,30 +11,21 @@ npm ci
 npm run start:dev
 ```
 
-The server listens on `127.0.0.1:3000` by default. Without `DATABASE_URL`, metadata is stored in `./data/rollpilot.json` for local use. `/v1/health` is public. All other routes require a session token from `POST /v1/sessions`. The Gemini key is required for production boot. An unset key in development makes AI requests return HTTP 503.
+The server listens on `127.0.0.1:3000` by default. Without `MONGODB_URI`, metadata is stored in `./data/rollpilot.json` for local use. `/v1/health` is public. All other routes require a session token from `POST /v1/sessions`. The Gemini key is required for production boot. An unset key in development makes AI requests return HTTP 503.
 
-## Heroku deployment
+## Heroku Dashboard deployment from GitHub
 
-Heroku's filesystem is ephemeral, so a deployed instance requires Postgres. `DATABASE_URL` switches the store to a Postgres transaction and loads prior state at boot. Use one web dyno for this TestFlight beta; rate limits are process-local (20 new sessions per IP per hour and 20 analyses per session per hour). A larger public release needs account authentication and shared rate limiting.
+The backend is a separate repository at `SadigLatifli/rollpilot-api`. Connect that repository to Heroku; the Expo app lives in a different directory and is not deployed by Heroku. Heroku's filesystem is ephemeral, so production requires a persistent MongoDB database. The app connects to the `rollpilot` database using `MONGODB_URI`; locally, it uses the JSON file unless a MongoDB URI is supplied.
 
-From this directory:
+1. Create a MongoDB Atlas project and cluster, then create a database user with read/write access to the `rollpilot` database.
+2. In Atlas **Network Access**, allow connections from Heroku. Heroku dynos do not have a fixed outbound IP by default, so a broad `0.0.0.0/0` entry may be needed for this setup. It allows attempts from any IP; protect the database with a unique strong password and database-scoped user. Atlas IP access lists control which clients can connect.
+3. In Atlas, choose **Connect → Drivers → Node.js** and copy the connection URI. In Heroku **Settings → Config Vars**, add it as `MONGODB_URI`; replace the URI placeholders with the database user's credentials. Also add `GEMINI_API_KEY`. Never commit either secret or `.env` to GitHub. Heroku supplies `PORT` and sets `NODE_ENV=production`.
+4. In Heroku **Deploy → Deployment method**, choose **GitHub**. Connect `SadigLatifli/rollpilot-api`, select branch `main`, and enable **Automatic Deploys**. Leave **Wait for CI to pass** off unless you configure a GitHub CI check.
+5. Use **Deploy Branch** once for the first deployment. After that, pushing a commit to `main` triggers a new deployment automatically.
+6. Open `https://YOUR_HEROKU_APP.herokuapp.com/v1/health`; a healthy deployment returns `{"status":"ok"}`. If it does not, check **Activity** and **More → View logs** in Heroku Dashboard.
+7. Set that exact HTTPS origin as `EXPO_PUBLIC_API_URL` in the EAS **production** environment before building the iPhone app. This is an app build setting, separate from Heroku's config vars.
 
-```sh
-git init
-git add .
-git commit -m "Prepare RollPilot API for TestFlight"
-heroku login
-heroku create YOUR_UNIQUE_ROLLPILOT_API_NAME
-heroku addons:create heroku-postgresql:essential-0 -a YOUR_UNIQUE_ROLLPILOT_API_NAME
-heroku pg:wait -a YOUR_UNIQUE_ROLLPILOT_API_NAME
-read -s ROLLPILOT_GEMINI_KEY
-heroku config:set GEMINI_API_KEY="$ROLLPILOT_GEMINI_KEY" -a YOUR_UNIQUE_ROLLPILOT_API_NAME
-unset ROLLPILOT_GEMINI_KEY
-git push heroku HEAD:main
-curl https://YOUR_UNIQUE_ROLLPILOT_API_NAME.herokuapp.com/v1/health
-```
-
-Heroku sets `DATABASE_URL`, `PORT`, and `NODE_ENV=production`. The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/main.js`. App metadata is persisted in Postgres. Neither photo bytes nor the Gemini key are stored there.
+The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/main.js`. Each session is stored as one document in MongoDB. Neither photo bytes nor the Gemini key are stored there. Use one web dyno for this TestFlight beta; rate limits are process-local (20 new sessions per IP per hour and 20 analyses per session per hour). A larger public release needs account authentication and shared rate limiting.
 
 ## API behaviour
 
