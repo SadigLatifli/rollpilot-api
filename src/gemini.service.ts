@@ -1,4 +1,4 @@
-import { BadGatewayException, BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import { AnalyzeDto } from './dto';
 
@@ -75,8 +75,13 @@ export class GeminiService {
         response_format: { type: 'text', mime_type: 'application/json', schema },
       }, { timeout_ms: 30_000, retries: { strategy: 'none' } });
       raw = JSON.parse(response.output_text ?? '');
-    } catch {
-      throw new BadGatewayException('Gemini analysis failed');
+    } catch (error) {
+      const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : undefined;
+      if (status === 503) throw new ServiceUnavailableException('Gemini is busy right now. Please try again in a few minutes.');
+      if (status === 429) throw new HttpException('Gemini request limit reached. Please try again later.', 429);
+      if (status === 401 || status === 403) throw new ServiceUnavailableException('Gemini access is not configured correctly.');
+      console.error('Gemini analysis failed', { status: status ?? 'unknown' });
+      throw new BadGatewayException('Gemini analysis failed. Please try again.');
     }
     return validateAnalysis(raw, ids);
   }
