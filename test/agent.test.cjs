@@ -7,7 +7,7 @@ require('reflect-metadata');
 const { NestFactory } = require('@nestjs/core');
 const { ValidationPipe } = require('@nestjs/common');
 const { AppModule } = require('../dist/app.module.js');
-const { GeminiService, validateAnalysis, withBusyFallback } = require('../dist/gemini.service.js');
+const { AiAnalysisService, validateAnalysis, withBusyFallback } = require('../dist/ai-analysis.service.js');
 
 test('Gemini busy response uses fallback while key errors remain visible', async () => {
   const attempted = [];
@@ -15,13 +15,16 @@ test('Gemini busy response uses fallback while key errors remain visible', async
   assert.equal(result, 'ok');
   assert.deepEqual(attempted, ['primary', 'fallback']);
   await assert.rejects(withBusyFallback(['primary', 'fallback'], async () => { throw { status: 403 }; }), error => error.status === 403);
+  const retries = [];
+  await assert.rejects(withBusyFallback(['primary', 'fallback'], async model => { retries.push(model); throw { status: 503 }; }, async () => {}), error => error.status === 503);
+  assert.deepEqual(retries, ['primary', 'fallback', 'fallback']);
 });
 
 test('Gemini plans use known assets and cleanup returns only reviewed IDs', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'rollpilot-agent-'));
   process.env.DATA_FILE = join(directory, 'state.json');
-  const original = GeminiService.prototype.analyze;
-  GeminiService.prototype.analyze = async () => ({ kind: 'cleanup', groups: [{ title: 'Review these', assetIds: ['asset-1'] }] });
+  const original = AiAnalysisService.prototype.analyze;
+  AiAnalysisService.prototype.analyze = async () => ({ kind: 'cleanup', groups: [{ title: 'Review these', assetIds: ['asset-1'] }] });
   let app;
   try {
     app = await NestFactory.create(AppModule, { logger: false });
@@ -45,7 +48,7 @@ test('Gemini plans use known assets and cleanup returns only reviewed IDs', asyn
     assert.deepEqual(reviewed.data.selectedAssetIds, ['asset-1']);
     assert.equal((await readFile(process.env.DATA_FILE, 'utf8')).includes('iVBORw0KGgo='), false);
   } finally {
-    GeminiService.prototype.analyze = original;
+    AiAnalysisService.prototype.analyze = original;
     if (app) await app.close();
     await rm(directory, { recursive: true, force: true });
   }
@@ -54,7 +57,7 @@ test('Gemini plans use known assets and cleanup returns only reviewed IDs', asyn
 test('Gemini rejects thumbnails without consent before sending them', async () => {
   process.env.GEMINI_API_KEY = 'test-only';
   try {
-    const gemini = new GeminiService();
+    const gemini = new AiAnalysisService();
     await assert.rejects(gemini.analyze({ command: 'Find cats', cloudImagesAllowed: false, candidates: [{ assetId: 'a', thumbnail: { mimeType: 'image/png', data: 'iVBORw0KGgo=' } }] }), error => error.status === 400);
   } finally {
     delete process.env.GEMINI_API_KEY;
@@ -66,4 +69,41 @@ test('Gemini output cannot introduce or duplicate asset IDs', () => {
   assert.throws(() => validateAnalysis({ kind: 'cleanup', groups: [{ title: 'Old', assetIds: ['other'] }] }, ids), error => error.status === 502);
   assert.throws(() => validateAnalysis({ kind: 'cleanup', groups: [{ title: 'Old', assetIds: ['asset-1', 'asset-1'] }] }, ids), error => error.status === 502);
   assert.deepEqual(validateAnalysis({ kind: 'find', groups: [{ title: 'Matches', assetIds: ['asset-1'] }] }, ids).groups[0].assetIds, ['asset-1']);
+});
+
+test('Gemini is the default provider', async () => {
+  const originalProvider = process.env.AI_PROVIDER;
+  const originalKey = process.env.GEMINI_API_KEY;
+  delete process.env.AI_PROVIDER;
+  delete process.env.GEMINI_API_KEY;
+  try {
+    await assert.rejects(new AiAnalysisService().analyze({ command: 'Find cats', cloudImagesAllowed: false, candidates: [] }), /Gemini is not configured/);
+  } finally {
+    if (originalProvider === undefined) delete process.env.AI_PROVIDER; else process.env.AI_PROVIDER = originalProvider;
+    if (originalKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = originalKey;
+  }
+});
+
+test('OpenAI is an optional provider and does not store photo plans', async () => {
+  const originalFetch = global.fetch;
+  const originalProvider = process.env.AI_PROVIDER;
+  process.env.AI_PROVIDER = 'openai';
+  process.env.OPENAI_API_KEY = 'test-only';
+  let sent;
+  global.fetch = async (url, options) => {
+    assert.equal(url, 'https://api.openai.com/v1/responses');
+    sent = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({ kind: 'find', groups: [{ title: 'Cats', assetIds: ['a'] }] }) }] }] }) };
+  };
+  try {
+    const result = await new AiAnalysisService().analyze({ command: 'Find cats', cloudImagesAllowed: false, candidates: [{ assetId: 'a', description: 'cat, sleeping' }] });
+    assert.equal(result.groups[0].assetIds[0], 'a');
+    assert.equal(sent.store, false);
+    assert.equal(sent.text.format.type, 'json_schema');
+    assert.deepEqual(sent.input[0].content.map(item => item.type), ['input_text', 'input_text']);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalProvider === undefined) delete process.env.AI_PROVIDER; else process.env.AI_PROVIDER = originalProvider;
+    delete process.env.OPENAI_API_KEY;
+  }
 });

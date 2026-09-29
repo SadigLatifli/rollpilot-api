@@ -3,7 +3,7 @@ import { AppController, PublicController } from './app.controller';
 import { RollpilotService } from './rollpilot.service';
 import { SessionGuard } from './session.guard';
 import { StoreService } from './store.service';
-import { GeminiService } from './gemini.service';
+import { AiAnalysisService } from './ai-analysis.service';
 
-@Module({ controllers: [PublicController, AppController], providers: [StoreService, GeminiService, RollpilotService, SessionGuard] })
+@Module({ controllers: [PublicController, AppController], providers: [StoreService, AiAnalysisService, RollpilotService, SessionGuard] })
 export class AppModule {}

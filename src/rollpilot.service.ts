@@ -1,14 +1,14 @@
 import { BadRequestException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { AnalyzeDto, ConfirmPlanDto, CreatePlanDto } from './dto';
-import { GeminiService } from './gemini.service';
+import { AiAnalysisService } from './ai-analysis.service';
 import type { Activity, AgentPlan, Collection, Session } from './models';
 import { StoreService } from './store.service';
 
 @Injectable()
 export class RollpilotService {
   private readonly analysisBySession = new Map<string, { count: number; until: number }>();
-  constructor(private readonly store: StoreService, private readonly gemini: GeminiService) {}
+  constructor(private readonly store: StoreService, private readonly analysis: AiAnalysisService) {}
 
   state(hash: string) {
     return this.store.getSession(hash);
@@ -47,7 +47,12 @@ export class RollpilotService {
     if (current.count >= 20) throw new HttpException('AI request limit reached. Try again in an hour.', 429);
     current.count++;
     this.analysisBySession.set(hash, current);
-    const analysis = await this.gemini.analyze(input);
+    let analysis: Awaited<ReturnType<AiAnalysisService['analyze']>>;
+    try { analysis = await this.analysis.analyze(input); }
+    catch (error) {
+      current.count = Math.max(0, current.count - 1);
+      throw error;
+    }
     const count = analysis.groups.reduce((sum, group) => sum + group.assetIds.length, 0);
     const scanned = `${input.candidates.length} candidate ${input.candidates.length === 1 ? 'photo' : 'photos'} considered`;
     if (!count) return { plan: null, headline: 'No matching candidates found', scanned };
