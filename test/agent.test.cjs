@@ -7,7 +7,15 @@ require('reflect-metadata');
 const { NestFactory } = require('@nestjs/core');
 const { ValidationPipe } = require('@nestjs/common');
 const { AppModule } = require('../dist/app.module.js');
-const { GeminiService, validateAnalysis } = require('../dist/gemini.service.js');
+const { GeminiService, validateAnalysis, withBusyFallback } = require('../dist/gemini.service.js');
+
+test('Gemini busy response uses fallback while key errors remain visible', async () => {
+  const attempted = [];
+  const result = await withBusyFallback(['primary', 'fallback'], async model => { attempted.push(model); if (model === 'primary') throw { status: 503 }; return 'ok'; });
+  assert.equal(result, 'ok');
+  assert.deepEqual(attempted, ['primary', 'fallback']);
+  await assert.rejects(withBusyFallback(['primary', 'fallback'], async () => { throw { status: 403 }; }), error => error.status === 403);
+});
 
 test('Gemini plans use known assets and cleanup returns only reviewed IDs', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'rollpilot-agent-'));

@@ -32,6 +32,6 @@ The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/ma
 - `POST /v1/sessions` returns a bearer token. The phone saves it in SecureStore; only its SHA-256 hash is persisted. A lost token cannot recover a session.
 - `POST /v1/agent/analyze` accepts up to 30 candidates (the current phone UI submits up to 12), each with an optional image of at most 200 KB. `cloudImagesAllowed` must be true for thumbnails. The response only refers to supplied candidate IDs.
 - `POST /v1/plans/:id/confirm` saves collection or cleanup review metadata. It never alters Apple Photos; the phone invokes iOS album or delete APIs after the person confirms.
-- Errors use normal HTTP status codes. Missing AI configuration returns 503, upstream AI failures return 502, and rate limits return 429.
+- Errors use normal HTTP status codes. Missing AI configuration returns 503, upstream AI failures return 502, and rate limits return 429. If the primary Gemini model returns 503, the API tries `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash`) once before reporting that Gemini is busy. Authentication errors do not trigger fallback.
 
 Run `npm run typecheck`, `npm test`, and `npm audit --omit=dev` before redeploying.
