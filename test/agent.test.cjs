@@ -107,3 +107,38 @@ test('OpenAI is an optional provider and does not store photo plans', async () =
     delete process.env.OPENAI_API_KEY;
   }
 });
+
+test('visual search forwards real image content and enforces attribute binding in the prompt', async () => {
+  const originalFetch = global.fetch;
+  const originalProvider = process.env.AI_PROVIDER;
+  const originalKey = process.env.OPENAI_API_KEY;
+  process.env.AI_PROVIDER = 'openai';
+  process.env.OPENAI_API_KEY = 'test-only';
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  let sent;
+  global.fetch = async (_, options) => {
+    sent = JSON.parse(options.body);
+    return { ok: true, json: async () => ({ output: [{ content: [{ type: 'output_text', text: JSON.stringify({ kind: 'find', groups: [] }) }] }] }) };
+  };
+  try {
+    await new AiAnalysisService().analyze({ command: 'green pants', cloudImagesAllowed: true,
+      candidates: [{ assetId: 'a', thumbnail: { mimeType: 'image/jpeg', data: jpeg } }] });
+    assert.deepEqual(sent.input[0].content.map(item => item.type), ['input_text', 'input_text', 'input_image']);
+    assert.equal(sent.input[0].content[2].image_url, `data:image/jpeg;base64,${jpeg}`);
+    assert.match(sent.instructions, /pants themselves are green/);
+    assert.equal(sent.store, false);
+  } finally {
+    global.fetch = originalFetch;
+    if (originalProvider === undefined) delete process.env.AI_PROVIDER; else process.env.AI_PROVIDER = originalProvider;
+    if (originalKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalKey;
+  }
+});
+
+test('a configured retired Gemini model can use the explicit supported fallback', async () => {
+  const calls = [];
+  const result = await withBusyFallback(['retired', 'supported'], async model => {
+    calls.push(model); if (model === 'retired') throw { status: 404 }; return 'ok';
+  }, async () => {});
+  assert.equal(result, 'ok');
+  assert.deepEqual(calls, ['retired', 'supported']);
+});

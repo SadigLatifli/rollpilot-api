@@ -1,6 +1,7 @@
 import { BadRequestException, HttpException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { AnalyzeDto, ConfirmPlanDto, CreatePlanDto } from './dto';
+import { AnalyzeDto, IndexPhotosDto, ConfirmPlanDto, CreatePlanDto } from './dto';
+import { VisualIndexService } from './visual-index.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import type { Activity, AgentPlan, Collection, Session } from './models';
 import { StoreService } from './store.service';
@@ -8,7 +9,7 @@ import { StoreService } from './store.service';
 @Injectable()
 export class RollpilotService {
   private readonly analysisBySession = new Map<string, { count: number; until: number }>();
-  constructor(private readonly store: StoreService, private readonly analysis: AiAnalysisService) {}
+  constructor(private readonly store: StoreService, private readonly analysis: AiAnalysisService, private readonly visualIndex: VisualIndexService) {}
 
   state(hash: string) {
     return this.store.getSession(hash);
@@ -38,6 +39,18 @@ export class RollpilotService {
       session.currentPlan = plan;
       return plan;
     });
+  }
+
+  async indexPhotos(hash: string, input: IndexPhotosDto) {
+    // Preserve the existing 20-batch/hour cost ceiling; facts are reused across queries.
+    const now = Date.now();
+    const existing = this.analysisBySession.get(hash);
+    const bucket = existing && existing.until > now ? existing : { count: 0, until: now + 3_600_000 };
+    if (bucket.count >= 20) throw new HttpException('Photo indexing limit reached. Your saved index still works; resume in an hour.', 429);
+    bucket.count++;
+    this.analysisBySession.set(hash, bucket);
+    try { return await this.visualIndex.describe(input); }
+    catch (error) { bucket.count = Math.max(0, bucket.count - 1); throw error; }
   }
 
   async analyze(hash: string, input: AnalyzeDto) {

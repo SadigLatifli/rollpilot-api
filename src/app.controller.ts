@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
-import { AnalyzeDto, CompleteOnboardingDto, ConfirmPlanDto, CreatePlanDto } from './dto';
+import { AnalyzeDto, IndexPhotosDto, CompleteOnboardingDto, ConfirmPlanDto, CreatePlanDto } from './dto';
 import { RollpilotService } from './rollpilot.service';
 import { SessionGuard, type SessionRequest } from './session.guard';
 import { StoreService } from './store.service';
@@ -9,7 +9,7 @@ export class PublicController {
   private readonly sessionsByIp = new Map<string, { count: number; until: number }>();
   constructor(private readonly store: StoreService) {}
 
-  @Get('health') health() { return { status: 'ok' }; }
+  @Get('health') health() { return { status: 'ok', searchVersion: 2, visualIndexVersion: 1 }; }
   @Post('sessions') createSession(@Req() request: { ip?: string }) {
     const ip = request.ip ?? 'unknown';
     const now = Date.now();
@@ -33,6 +33,7 @@ export class AppController {
   @Get('collections/:id') collection(@Req() request: SessionRequest, @Param('id') id: string) { return this.service.collection(request.sessionHash, id); }
   @Get('activity') activity(@Req() request: SessionRequest) { return this.service.state(request.sessionHash)?.activities; }
   @Post('plans') plan(@Req() request: SessionRequest, @Body() input: CreatePlanDto) { return this.service.createPlan(request.sessionHash, input); }
+  @Post('agent/index') index(@Req() request: SessionRequest, @Body() input: IndexPhotosDto) { return this.service.indexPhotos(request.sessionHash, input); }
   @Post('agent/analyze') analyze(@Req() request: SessionRequest, @Body() input: AnalyzeDto) { return this.service.analyze(request.sessionHash, input); }
   @Post('plans/:id/confirm') confirm(@Req() request: SessionRequest, @Param('id') id: string, @Body() input: ConfirmPlanDto) { return this.service.confirmPlan(request.sessionHash, id, input); }
 }

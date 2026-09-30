@@ -1,6 +1,6 @@
 # RollPilot API
 
-NestJS backend for bounded AI plans over candidates selected by the iPhone's local index. The iPhone keeps full-size photos and controls all Apple Photos writes. The current app sends OCR text, image labels, filenames, and dates for at most 30 candidates; it sends no photo files or thumbnails. Gemini 2.5 Flash-Lite is the default cloud model with `store: false`; set `AI_PROVIDER=openai` to use OpenAI instead. The backend stores plan metadata, not image bytes or OCR text.
+NestJS backend for on-device-first photo search. Originals remain in Apple Photos. With explicit consent, the app sends bounded JPEG previews to `/v1/agent/index` for reusable visual descriptions. Gemini 3.5 Flash-Lite handles initial classification; up to four ambiguous photos per batch are reviewed by Gemini 3.5 Flash. Facts are returned to the phone and persisted only in its SQLite index, never in backend plan/session storage. The legacy `/agent/analyze` route remains available. The local key returned HTTP 404 for Gemini 2.5 Flash-Lite on September 30, 2026; do not assume a model is usable merely because it appears in the model list.
 
 ## Local development
 
@@ -32,6 +32,15 @@ The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/ma
 - `POST /v1/sessions` returns a bearer token. The phone saves it in SecureStore; only its SHA-256 hash is persisted. A lost token cannot recover a session.
 - `POST /v1/agent/analyze` accepts up to 30 candidates. The current phone UI submits descriptions only. The API still accepts an optional image of at most 200 KB when `cloudImagesAllowed` is true, but the current app never sends one. The response only refers to supplied candidate IDs.
 - `POST /v1/plans/:id/confirm` saves collection or cleanup review metadata. It never alters Apple Photos; the phone invokes iOS album or delete APIs after the person confirms.
-- Errors use normal HTTP status codes. Missing AI configuration returns 503, upstream AI failures return 502, and rate limits return 429. Gemini retries with `GEMINI_FALLBACK_MODEL` (default `gemini-3.1-flash-lite`) on a 503 before reporting that it is busy. Failed analyses do not consume the per-session analysis allowance.
+- Errors use normal HTTP status codes. Missing AI configuration returns 503, upstream AI failures return 502, and rate limits return 429. Gemini retries with `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash-lite`) on a 503 or retired-model 404 before reporting that it is busy. Failed analyses do not consume the per-session analysis allowance.
 
 Run `npm run typecheck`, `npm test`, and `npm audit --omit=dev` before redeploying.
+
+
+## Visual index deployment
+
+Deploy this backend before distributing the Search engine 2 app. `/v1/health` must return `searchVersion: 2` and `visualIndexVersion: 1`. Configure `GEMINI_API_KEY`; optional model overrides are `GEMINI_INDEX_MODEL` and `GEMINI_REVIEW_MODEL`. Existing `GEMINI_MODEL` overrides affect the legacy plan route only.
+
+`POST /v1/agent/index` requires the normal session bearer token and `{ cloudImagesAllowed: true, candidates: [{ assetId, thumbnail: { mimeType, data } }] }`. Limits: 20 candidates, 200 KB per preview, 4 MB aggregate, and the existing shared 20 successful batches per session/hour. A batch must classify every supplied ID exactly once to be cached. Failed provider calls refund the request allowance; ambiguous stronger-review failures remain marked uncertain. Different queries reuse cached facts on the phone and need no additional image requests until an asset changes.
+
+Run `npm test` for unit/API integration tests. A bounded live test is available through `scripts/evaluate-photo-index.cjs`; use `--public-only` with the documented public fixtures. Never supply personal/repository images without authorization to send those specific files to Gemini. The live test is opt-in and is not part of `npm test`.

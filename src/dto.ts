@@ -50,3 +50,8 @@ export class AnalyzeDto {
   @IsBoolean() cloudImagesAllowed!: boolean;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => PhotoCandidateDto) candidates!: PhotoCandidateDto[];
 }
+
+export class IndexPhotosDto {
+  @IsBoolean() cloudImagesAllowed!: boolean;
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => PhotoCandidateDto) candidates!: PhotoCandidateDto[];
+}
