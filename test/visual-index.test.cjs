@@ -1,10 +1,26 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 require('reflect-metadata');
-const { VisualIndexService, validatePhotoFacts } = require('../dist/visual-index.service');
+const { VisualIndexService, validatePhotoFacts, visualProviderError, withVisualRetry } = require('../dist/visual-index.service');
 const data = Buffer.from([255, 216, 255, 217]).toString('base64');
 const candidate = assetId => ({ assetId, thumbnail: { mimeType: 'image/jpeg', data } });
 const facts = (assetId, uncertain = false) => ({ assetId, caption: 'A cat', text: '', objects: [{ name: 'cat', attributes: ['black'], confidence: 0.9 }], tags: [], uncertain });
+
+test('provider errors identify quota, invalid batches, and temporary failures', () => {
+  assert.equal(visualProviderError({ status: 429 }).getStatus(), 429);
+  assert.match(visualProviderError({ status: 429 }).message, /limit/i);
+  assert.equal(visualProviderError({ status: 400 }).getStatus(), 502);
+  assert.equal(visualProviderError({ status: 504 }).getStatus(), 504);
+  assert.equal(visualProviderError({ status: 503 }).getStatus(), 503);
+});
+test('temporary provider failures retry once; quota failures do not', async () => {
+  let calls = 0;
+  const result = await withVisualRetry(async () => { if (++calls === 1) throw { status: 503 }; return 'ok'; }, async () => {});
+  assert.equal(result, 'ok'); assert.equal(calls, 2);
+  calls = 0;
+  await assert.rejects(withVisualRetry(async () => { calls++; throw { status: 429 }; }, async () => {}));
+  assert.equal(calls, 1);
+});
 
 test('only ambiguous classifications are sent to the stronger model, capped at four', async () => {
   const service = new VisualIndexService();

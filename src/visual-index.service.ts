@@ -1,4 +1,4 @@
-import { BadGatewayException, BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadGatewayException, BadRequestException, GatewayTimeoutException, HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import { IndexPhotosDto } from './dto';
 
@@ -29,6 +29,34 @@ export function validatePhotoFacts(raw: unknown, expected: string[]): PhotoFacts
     }
   }
   return photos as PhotoFacts[];
+}
+
+function providerStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
+  const status = Number(error.status);
+  return Number.isInteger(status) ? status : undefined;
+}
+
+export function visualProviderError(error: unknown): HttpException {
+  const status = providerStatus(error);
+  if (status === 401 || status === 403) return new ServiceUnavailableException('Visual search is unavailable because Gemini access is not configured correctly.');
+  if (status === 429) return new HttpException('Gemini has reached its request limit. Saved visual results remain available; try again after the limit resets.', 429);
+  if (status === 404) return new ServiceUnavailableException('The configured Gemini visual model is unavailable. Please contact support.');
+  if (error instanceof SyntaxError) return new BadGatewayException('Gemini returned an incomplete photo batch. The app can retry smaller groups.');
+  if (status === 400 || status === 422) return new BadGatewayException('Gemini could not analyze this photo batch. The app can retry smaller groups.');
+  if (status === 408 || status === 504 || (error instanceof Error && /timeout|timed out|deadline/i.test(error.name))) {
+    return new GatewayTimeoutException('Gemini took too long to analyze this photo batch. The app can retry smaller groups.');
+  }
+  return new ServiceUnavailableException('Gemini is temporarily unavailable. Saved visual results remain available; try again shortly.');
+}
+
+export async function withVisualRetry<T>(run: () => Promise<T>, pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))): Promise<T> {
+  try { return await run(); }
+  catch (error) {
+    if (![408, 500, 503, 504].includes(providerStatus(error) ?? -1)) throw error;
+    await pause(600 + Math.floor(Math.random() * 300));
+    return run();
+  }
 }
 
 @Injectable()
@@ -73,17 +101,15 @@ export class VisualIndexService {
         { text: JSON.stringify({ assetId: candidate.assetId, localHints: candidate.description ?? '' }) },
         { inlineData: { data: candidate.thumbnail!.data, mimeType: candidate.thumbnail!.mimeType } },
       ]);
-      const response = await ai.models.generateContent({ model, contents: [{ role: 'user', parts }], config: {
+      const response = await withVisualRetry(() => ai.models.generateContent({ model, contents: [{ role: 'user', parts }], config: {
         systemInstruction: FACTS_INSTRUCTIONS, responseMimeType: 'application/json', responseJsonSchema: schema,
         httpOptions: { timeout: 25_000 }, temperature: 0,
-      } });
+      } }));
       return validatePhotoFacts(JSON.parse(response.text ?? ''), candidates.map(photo => photo.assetId));
     } catch (error) {
       if (error instanceof BadGatewayException) throw error;
-      const status = typeof error === 'object' && error && 'status' in error ? Number(error.status) : undefined;
-      console.warn('Visual index provider request failed', { model, status });
-      if (status === 401 || status === 403) throw new ServiceUnavailableException('Gemini credentials do not permit visual indexing. On-device search is still available.');
-      throw new ServiceUnavailableException('Visual indexing could not finish this batch. Saved progress is kept; try again later.');
+      console.warn('Visual index provider request failed', { model, status: providerStatus(error), name: error instanceof Error ? error.name : undefined });
+      throw visualProviderError(error);
     }
   }
 }
