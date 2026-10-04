@@ -1,0 +1,76 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+require('reflect-metadata');
+const { EmbeddingService, normalizeEmbedding, withEmbeddingRetry } = require('../dist/embedding.service');
+const values = Array.from({ length: 768 }, (_, i) => i === 0 ? 2 : 0);
+const thumbnail = { mimeType: 'image/jpeg', data: Buffer.from([255, 216, 255, 217]).toString('base64') };
+
+test('image and text use the same normalized 768-dimensional space; validate before provider calls', async () => {
+  const service = new EmbeddingService();
+  const calls = [];
+  service.generate = async parts => { calls.push(parts); return { embeddings: [{ values }] }; };
+  await assert.rejects(service.image({ cloudImagesAllowed: false, thumbnail }), { status: 400 });
+  await assert.rejects(service.image({ cloudImagesAllowed: true, thumbnail: { ...thumbnail, data: 'bad' } }), { status: 400 });
+  assert.equal(calls.length, 0);
+  const image = await service.image({ cloudImagesAllowed: true, thumbnail });
+  const text = await service.text('brown dog sleeping on sofa');
+  assert.deepEqual(image, text);
+  assert.equal(image.model, 'gemini-embedding-2');
+  assert.equal(image.dimensions, 768);
+  assert.equal(image.values[0], 1);
+  assert.deepEqual(calls[0], [{ inlineData: thumbnail }]);
+  assert.equal(calls[1][0].text, 'brown dog sleeping on sofa');
+  for (const bad of [[], Array(768).fill(0), Array(768).fill(NaN), Array(768).fill('1')]) assert.throws(() => normalizeEmbedding(bad));
+  service.generate = async () => ({ embeddings: [{ values: [1] }] });
+  await assert.rejects(service.text('cat'));
+});
+test('transient failures retry once; quota/access errors do not; diagnostics probe model availability', async () => {
+  let calls = 0;
+  assert.equal(await withEmbeddingRetry(async () => { if (++calls === 1) throw { status: 503 }; return 42; }, async () => {}), 42);
+  calls = 0;
+  await assert.rejects(withEmbeddingRetry(async () => { calls++; throw { status: 429 }; }, async () => {}));
+  assert.equal(calls, 1);
+  const service = new EmbeddingService();
+  service.generate = async () => { throw { status: 404 }; };
+  const diagnostic = await service.diagnostics();
+  assert.equal(diagnostic.backendReachable, true);
+  assert.equal(diagnostic.modelAvailable, false);
+  assert.match(diagnostic.lastAIError, /unavailable/);
+});
+test('authenticated embedding endpoints, quotas, retired index and no server vector persistence', async () => {
+  const { mkdtemp, readFile, rm } = require('node:fs/promises');
+  const { join } = require('node:path');
+  const { tmpdir } = require('node:os');
+  const { NestFactory } = require('@nestjs/core');
+  const { ValidationPipe } = require('@nestjs/common');
+  const { AppModule } = require('../dist/app.module');
+  const { RollpilotService } = require('../dist/rollpilot.service');
+  const directory = await mkdtemp(join(tmpdir(), 'rollpilot-embeddings-'));
+  process.env.DATA_FILE = join(directory, 'state.json');
+  let app;
+  try {
+    app = await NestFactory.create(AppModule, { logger: false });
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.get(EmbeddingService).generate = async () => ({ embeddings: [{ values }] });
+    await app.listen(0, '127.0.0.1');
+    const base = await app.getUrl();
+    const post = (route, body, token) => fetch(base + '/v1' + route, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    assert.equal((await post('/embeddings/image', { cloudImagesAllowed: true, thumbnail })).status, 401);
+    const token = (await (await post('/sessions', {})).json()).token;
+    assert.equal((await post('/agent/index', {}, token)).status, 410);
+    assert.equal((await post('/embeddings/image', { cloudImagesAllowed: true }, token)).status, 400);
+    assert.equal((await post('/embeddings/image', { cloudImagesAllowed: false, thumbnail }, token)).status, 400);
+    const image = await post('/embeddings/image', { cloudImagesAllowed: true, thumbnail }, token);
+    assert.equal(image.status, 201);
+    assert.equal((await image.json()).values.length, 768);
+    assert.equal((await post('/embeddings/text', { text: 'green pants' }, token)).status, 201);
+    assert.equal((await post('/embeddings/text', { text: '  ' }, token)).status, 400);
+    const service = app.get(RollpilotService);
+    service.embeddingBudgets.set('quota:image', { count: 1200, until: Date.now() + 60000 });
+    await assert.rejects(service.embed('quota', { cloudImagesAllowed: true, thumbnail }), { status: 429 });
+    assert.equal((await service.embed('quota', { text: 'cat' })).values.length, 768);
+    const disk = await readFile(process.env.DATA_FILE, 'utf8');
+    assert.equal(disk.includes(thumbnail.data), false);
+    assert.equal(disk.includes('values'), false);
+  } finally { if (app) await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

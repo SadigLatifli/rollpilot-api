@@ -1,6 +1,6 @@
 # RollPilot API
 
-NestJS backend for on-device-first photo search. Originals remain in Apple Photos. With explicit consent, the app sends bounded JPEG previews to `/v1/agent/index` for reusable visual descriptions. Gemini 3.5 Flash-Lite handles initial classification; up to four ambiguous photos per batch are reviewed by Gemini 3.5 Flash. Facts are returned to the phone and persisted only in its SQLite index, never in backend plan/session storage. The legacy `/agent/analyze` route remains available. The local key returned HTTP 404 for Gemini 2.5 Flash-Lite on September 30, 2026; do not assume a model is usable merely because it appears in the model list.
+NestJS proxy for Gemini Embedding 2 photo search. Image and text requests use `gemini-embedding-2` with 768 dimensions. Bounded previews are processed in memory; returned vectors remain in the phone's SQLite index. Flash/Flash-Lite is reserved for reasoning over up to six selected candidates. The old full-library description endpoint returns 410.
 
 ## Local development
 
@@ -25,22 +25,32 @@ The backend is a separate repository at `SadigLatifli/rollpilot-api`. Connect th
 6. Open `https://YOUR_HEROKU_APP.herokuapp.com/v1/health`; a healthy deployment returns `{"status":"ok"}`. If it does not, check **Activity** and **More → View logs** in Heroku Dashboard.
 7. Set that exact HTTPS origin as `EXPO_PUBLIC_API_URL` in the EAS **production** environment before building the iPhone app. This is an app build setting, separate from Heroku's config vars.
 
-The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/main.js`. Each session is stored as one document in MongoDB. Neither photo bytes nor provider keys are stored there. Use one web dyno for this TestFlight beta; rate limits are process-local (20 new sessions per IP per hour and 20 analyses per session per hour). A larger public release needs account authentication and shared rate limiting.
+The `heroku-postbuild` script compiles TypeScript and `Procfile` starts `dist/main.js`. Each session is stored as one document in MongoDB. Neither photo bytes nor provider keys are stored there. Use one web dyno for this TestFlight beta; rate limits are process-local (20 new sessions per IP per hour and separate embedding/reasoning budgets described below). A larger public release needs account authentication and shared rate limiting.
 
-## API behaviour
+## API behavior
 
-- `POST /v1/sessions` returns a bearer token. The phone saves it in SecureStore; only its SHA-256 hash is persisted. A lost token cannot recover a session.
-- `POST /v1/agent/analyze` accepts up to 30 candidates. The current phone UI submits descriptions only. The API still accepts an optional image of at most 200 KB when `cloudImagesAllowed` is true, but the current app never sends one. The response only refers to supplied candidate IDs.
-- `POST /v1/plans/:id/confirm` saves collection or cleanup review metadata. It never alters Apple Photos; the phone invokes iOS album or delete APIs after the person confirms.
-- Errors use normal HTTP status codes. Missing AI configuration returns 503, upstream AI failures return 502, and rate limits return 429. Gemini retries with `GEMINI_FALLBACK_MODEL` (default `gemini-3.5-flash-lite`) on a 503 or retired-model 404 before reporting that it is busy. Failed analyses do not consume the per-session analysis allowance.
+All routes except health/session creation require the existing SecureStore bearer session. Embedding requests never create plans or persist previews, text queries or vectors on the backend.
 
-Run `npm run typecheck`, `npm test`, and `npm audit --omit=dev` before redeploying.
+- `GET /v1/health`: `searchVersion: 3`, `embeddingModel: gemini-embedding-2`, `dimensions: 768`.
+- `POST /v1/embeddings/image`: `{ cloudImagesAllowed: true, thumbnail: { mimeType: "image/jpeg", data: "BASE64" } }`. One image, JPEG/PNG <=200 KB, required consent. No asset identifier is needed server-side.
+- `POST /v1/embeddings/text`: `{ text: "black Coke bottle" }`, 1–500 characters.
+- Both return `{ model, dimensions, values }`, with exactly 768 finite normalized numbers. No fallback to a different embedding space/model. API keys remain server-only.
+- `GET /v1/diagnostics`: backend reachability, model availability, model/dimensions, probe timestamp and last sanitized provider error. A real embedding probe is coalesced and cached for five minutes; configuration alone is not proof of availability.
+- `POST /v1/agent/index`: 410, including older clients. Deploy together with the new app rollout.
+- `POST /v1/agent/analyze`: optional small reasoning task, at most six candidates. Flash/Flash-Lite settings affect only this route. Purchases are one possible workflow, not the search engine.
+- Existing plan, collection, onboarding and confirmation routes are retained. Apple Photos changes still happen on-device after user review.
 
+Per-session/hour budgets are separate: 1,200 image attempts, 300 text attempts, and the existing 20 reasoning requests. Failed embedding attempts count to prevent retry storms. Provider 408/5xx errors retry once; 429/auth/model-access errors do not. Missing key/model access returns 503, invalid provider vectors 502, quota 429. No preview/query/vector content is logged. Limits are process-local; keep the existing single-dyno deployment or add shared enforcement before scaling.
 
-## Visual index deployment
+`GEMINI_API_KEY` is required in production even when optional reasoning uses OpenAI. Embedding model/dimensions are deliberately fixed to match the mobile index. No new database or vector service is required.
 
-Deploy this backend before distributing the Search engine 2 app. `/v1/health` must return `searchVersion: 2` and `visualIndexVersion: 1`. Configure `GEMINI_API_KEY`; optional model overrides are `GEMINI_INDEX_MODEL` and `GEMINI_REVIEW_MODEL`. Existing `GEMINI_MODEL` overrides affect the legacy plan route only.
+## Validation and rollout
 
-`POST /v1/agent/index` requires the normal session bearer token and `{ cloudImagesAllowed: true, candidates: [{ assetId, thumbnail: { mimeType, data } }] }`. Limits: 20 candidates, 200 KB per preview, 4 MB aggregate, and the existing shared 20 successful batches per session/hour. A batch must classify every supplied ID exactly once to be cached. Failed provider calls refund the request allowance; ambiguous stronger-review failures remain marked uncertain. Different queries reuse cached facts on the phone and need no additional image requests until an asset changes.
+Use Node 24. Run `npm run typecheck` and `npm test` (integration tests bind localhost). The sibling app has SQLite migration, resumability and hybrid-search tests. The opt-in live check is:
 
-Run `npm test` for unit/API integration tests. A bounded live test is available through `scripts/evaluate-photo-index.cjs`; use `--public-only` with the documented public fixtures. Never supply personal/repository images without authorization to send those specific files to Gemini. The live test is opt-in and is not part of `npm test`.
+```sh
+npm run build
+node --env-file=.env scripts/evaluate-embeddings.cjs /tmp/public-fixtures --public-only
+```
+
+Use only the documented public cat/dog fixtures, resized to <=200 KB. See the app's `SEARCH_VALIDATION.md` for fixture sources, measured scores and the physical-device QA still required. The test covers actual SDK/API calls, app indexing, disk SQLite/reopen, unchanged-photo reuse and local results; it simulates native Photos/OCR adapters.

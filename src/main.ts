@@ -6,8 +6,8 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
   if (process.env.NODE_ENV === 'production') {
-    const requiredKey = process.env.AI_PROVIDER === 'openai' ? 'OPENAI_API_KEY' : 'GEMINI_API_KEY';
-    if (!process.env[requiredKey]) throw new Error(`${requiredKey} is required in production`);
+    if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY is required for photo embeddings in production');
+    if (process.env.AI_PROVIDER === 'openai' && !process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY is required for the optional reasoning provider');
   }
   if (process.env.NODE_ENV === 'production' && !process.env.MONGODB_URI) throw new Error('MONGODB_URI is required in production');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);

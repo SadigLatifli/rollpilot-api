@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsBase64, IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsBase64, IsDefined, IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { PHOTO_KEYS, type PhotoKey } from './models';
 
 export class PlanGroupDto {
@@ -34,7 +34,7 @@ export class CompleteOnboardingDto {
 
 export class ThumbnailDto {
   @IsIn(['image/jpeg', 'image/png']) mimeType!: 'image/jpeg' | 'image/png';
-  @IsBase64() data!: string;
+  @IsBase64() @MaxLength(266668) data!: string;
 }
 
 export class PhotoCandidateDto {
@@ -48,10 +48,13 @@ export class PhotoCandidateDto {
 export class AnalyzeDto {
   @IsString() @MinLength(1) @MaxLength(500) command!: string;
   @IsBoolean() cloudImagesAllowed!: boolean;
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => PhotoCandidateDto) candidates!: PhotoCandidateDto[];
+  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(6) @ValidateNested({ each: true }) @Type(() => PhotoCandidateDto) candidates!: PhotoCandidateDto[];
 }
 
-export class IndexPhotosDto {
+export class EmbedImageDto {
   @IsBoolean() cloudImagesAllowed!: boolean;
-  @IsArray() @ArrayMinSize(1) @ArrayMaxSize(20) @ValidateNested({ each: true }) @Type(() => PhotoCandidateDto) candidates!: PhotoCandidateDto[];
+  @IsDefined() @ValidateNested() @Type(() => ThumbnailDto) thumbnail!: ThumbnailDto;
+}
+export class EmbedTextDto {
+  @IsString() @MinLength(1) @MaxLength(500) text!: string;
 }
