@@ -1,3 +1,4 @@
+import { requireCloudAI } from './cloud-ai';
 import { BadGatewayException, BadRequestException, HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { GoogleGenAI } from '@google/genai';
 import { AnalyzeDto } from './dto';
@@ -56,6 +57,7 @@ const schema = {
 @Injectable()
 export class AiAnalysisService {
   async analyze(input: AnalyzeDto): Promise<Analysis> {
+    requireCloudAI();
     if (input.candidates.length > 6) throw new BadRequestException('Reasoning is limited to six selected photos. Use embeddings for library search.');
     const ids = new Set(input.candidates.map(candidate => candidate.assetId));
     if (ids.size !== input.candidates.length) throw new BadRequestException('Candidate asset IDs must be unique');

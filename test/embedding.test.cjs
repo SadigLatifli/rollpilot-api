@@ -1,3 +1,5 @@
+// Provider behavior tests opt in; calls use mocked provider adapters.
+process.env.CLOUD_AI_ENABLED = 'true';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 require('reflect-metadata');

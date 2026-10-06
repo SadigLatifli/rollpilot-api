@@ -1,3 +1,4 @@
+import { cloudAIEnabled } from './cloud-ai';
 import { Body, Controller, Get, HttpException, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import { AnalyzeDto, EmbedImageDto, EmbedTextDto, CompleteOnboardingDto, ConfirmPlanDto, CreatePlanDto } from './dto';
 import { RollpilotService } from './rollpilot.service';
@@ -9,7 +10,7 @@ export class PublicController {
   private readonly sessionsByIp = new Map<string, { count: number; until: number }>();
   constructor(private readonly store: StoreService) {}
 
-  @Get('health') health() { return { status: 'ok', searchVersion: 3, embeddingModel: 'gemini-embedding-2', dimensions: 768 }; }
+  @Get('health') health() { return { status: 'ok', cloudAIEnabled: cloudAIEnabled(), searchVersion: 3, embeddingModel: 'gemini-embedding-2', dimensions: 768 }; }
   @Post('sessions') createSession(@Req() request: { ip?: string }) {
     const ip = request.ip ?? 'unknown';
     const now = Date.now();

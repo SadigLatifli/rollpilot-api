@@ -5,6 +5,7 @@ import { EmbeddingService } from './embedding.service';
 import { AiAnalysisService } from './ai-analysis.service';
 import type { Activity, AgentPlan, Collection, Session } from './models';
 import { StoreService } from './store.service';
+import { requireCloudAI } from './cloud-ai';
 
 @Injectable()
 export class RollpilotService {
@@ -43,6 +44,7 @@ export class RollpilotService {
 
   private readonly embeddingBudgets = new Map<string, { count: number; until: number }>();
   async embed(hash: string, input: EmbedImageDto | EmbedTextDto) {
+    requireCloudAI();
     const image = 'thumbnail' in input;
     const now = Date.now();
     for (const [key, bucket] of this.embeddingBudgets) if (bucket.until <= now) this.embeddingBudgets.delete(key);
@@ -57,6 +59,7 @@ export class RollpilotService {
   embeddingDiagnostics() { return this.embeddings.diagnostics(); }
 
   async analyze(hash: string, input: AnalyzeDto) {
+    requireCloudAI();
     const now = Date.now();
     const bucket = this.analysisBySession.get(hash);
     const current = bucket && bucket.until > now ? bucket : { count: 0, until: now + 3_600_000 };

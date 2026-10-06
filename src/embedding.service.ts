@@ -1,6 +1,7 @@
 import { BadGatewayException, BadRequestException, HttpException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { GoogleGenAI, type Part } from '@google/genai';
 import { EmbedImageDto } from './dto';
+import { cloudAIEnabled, requireCloudAI } from './cloud-ai';
 
 export const EMBEDDING_MODEL = 'gemini-embedding-2';
 export const EMBEDDING_DIMENSIONS = 768;
@@ -31,6 +32,7 @@ export class EmbeddingService {
   private probing?: Promise<{ available: boolean; checkedAt: number }>;
 
   async image(input: EmbedImageDto) {
+    requireCloudAI();
     if (!input.cloudImagesAllowed) throw new BadRequestException('Photo-preview consent is required.');
     const thumbnail = input.thumbnail;
     if (!thumbnail) throw new BadRequestException('A bounded photo preview is required.');
@@ -43,6 +45,7 @@ export class EmbeddingService {
   }
 
   text(text: string) {
+    requireCloudAI();
     if (!text.trim() || text.length > 500) throw new BadRequestException('Enter a query of 1–500 characters.');
     // Raw text and a single image share the same multimodal space. No taskType
     // (unsupported by Embedding 2), captions, or generative model fallback.
@@ -50,6 +53,7 @@ export class EmbeddingService {
   }
 
   async generate(parts: Part[]) {
+    requireCloudAI();
     if (!process.env.GEMINI_API_KEY) throw new ServiceUnavailableException('Gemini embedding access is not configured.');
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     return withEmbeddingRetry(() => ai.models.embedContent({
@@ -79,6 +83,9 @@ export class EmbeddingService {
   }
 
   async diagnostics() {
+    if (!cloudAIEnabled()) return { backendReachable: true, cloudAIEnabled: false,
+      model: EMBEDDING_MODEL, dimensions: EMBEDDING_DIMENSIONS, modelAvailable: false,
+      lastAIError: 'Cloud AI is disabled.' };
     // Real embed probe, coalesced and cached; never accept a key's presence as proof.
     if (!this.probe || Date.now() - this.probe.checkedAt > 5 * 60_000) {
       this.probing ??= this.text('photo search availability').then(() => this.probe!).catch(() => this.probe!)

@@ -1,10 +1,12 @@
 # RollPilot API
 
-NestJS proxy for Gemini Embedding 2 photo search. Image and text requests use `gemini-embedding-2` with 768 dimensions. Bounded previews are processed in memory; returned vectors remain in the phone's SQLite index. Flash/Flash-Lite is reserved for reasoning over up to six selected candidates. The old full-library description endpoint returns 410.
+Cloud AI is disabled by default. Leave `CLOUD_AI_ENABLED` unset or `false` to block image embeddings, query embeddings, reasoning, and diagnostic model probes, even if provider keys are configured. Deploy this backend change to apply that protection to older app builds. The mobile app now uses on-device classification and OCR.
+
+Optional NestJS proxy for Gemini Embedding 2 photo search. Image and text requests use `gemini-embedding-2` with 768 dimensions. Bounded previews are processed in memory; returned vectors remain in the phone's SQLite index. Flash/Flash-Lite is reserved for reasoning over up to six selected candidates. The old full-library description endpoint returns 410.
 
 ## Local development
 
-Requires Node.js 24. Set `GEMINI_API_KEY` in your shell or a local `.env` loader (Nest itself does not read `.env`), then run:
+Requires Node.js 24. Only to deliberately restore paid AI, set `CLOUD_AI_ENABLED=true` and `GEMINI_API_KEY` in your shell or a local `.env` loader (Nest itself does not read `.env`), then run:
 
 ```sh
 npm ci
@@ -19,7 +21,7 @@ The backend is a separate repository at `SadigLatifli/rollpilot-api`. Connect th
 
 1. Create a MongoDB Atlas project and cluster, then create a database user with read/write access to the `rollpilot` database.
 2. In Atlas **Network Access**, allow connections from Heroku. Heroku dynos do not have a fixed outbound IP by default, so a broad `0.0.0.0/0` entry may be needed for this setup. It allows attempts from any IP; protect the database with a unique strong password and database-scoped user. Atlas IP access lists control which clients can connect.
-3. In Atlas, choose **Connect → Drivers → Node.js** and copy the connection URI. In Heroku **Settings → Config Vars**, add it as `MONGODB_URI`; replace the URI placeholders with the database user's credentials. Also add `GEMINI_API_KEY`. Never commit either secret or `.env` to GitHub. Heroku supplies `PORT` and sets `NODE_ENV=production`.
+3. In Atlas, choose **Connect → Drivers → Node.js** and copy the connection URI. In Heroku **Settings → Config Vars**, add it as `MONGODB_URI`; replace the URI placeholders with the database user's credentials. Keep `CLOUD_AI_ENABLED=false`. `GEMINI_API_KEY` is only needed if paid cloud AI is deliberately restored. Never commit either secret or `.env` to GitHub. Heroku supplies `PORT` and sets `NODE_ENV=production`.
 4. In Heroku **Deploy → Deployment method**, choose **GitHub**. Connect `SadigLatifli/rollpilot-api`, select branch `main`, and enable **Automatic Deploys**. Leave **Wait for CI to pass** off unless you configure a GitHub CI check.
 5. Use **Deploy Branch** once for the first deployment. After that, pushing a commit to `main` triggers a new deployment automatically.
 6. Open `https://YOUR_HEROKU_APP.herokuapp.com/v1/health`; a healthy deployment returns `{"status":"ok"}`. If it does not, check **Activity** and **More → View logs** in Heroku Dashboard.
@@ -42,7 +44,7 @@ All routes except health/session creation require the existing SecureStore beare
 
 Per-session/hour budgets are separate: 1,200 image attempts, 300 text attempts, and the existing 20 reasoning requests. Failed embedding attempts count to prevent retry storms. Provider 408/5xx errors retry once; 429/auth/model-access errors do not. Missing key/model access returns 503, invalid provider vectors 502, quota 429. No preview/query/vector content is logged. Limits are process-local; keep the existing single-dyno deployment or add shared enforcement before scaling.
 
-`GEMINI_API_KEY` is required in production even when optional reasoning uses OpenAI. Embedding model/dimensions are deliberately fixed to match the mobile index. No new database or vector service is required.
+`GEMINI_API_KEY` is required only when cloud AI is explicitly enabled, even when optional reasoning uses OpenAI. Embedding model/dimensions are deliberately fixed to match the mobile index. No new database or vector service is required.
 
 ## Validation and rollout
 
